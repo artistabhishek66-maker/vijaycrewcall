@@ -1,0 +1,247 @@
+import React, { useState, useEffect, useCallback } from "react";
+import { Camera, UtensilsCrossed, Sparkles, Check, X, Clock, ShieldCheck, Loader2 } from "lucide-react";
+import * as db from "./db";
+
+const CATS = {
+  camera: { label: "Cameraman", icon: Camera, color: "#3B6E8F", bg: "#EAF1F6" },
+  catering: { label: "Caterer", icon: UtensilsCrossed, color: "#4C7A52", bg: "#EDF3EA" },
+  makeup: { label: "Makeup Artist", icon: Sparkles, color: "#B5566B", bg: "#F7EBEE" },
+};
+
+function Tag({ cat }) {
+  const c = CATS[cat];
+  const Icon = c.icon;
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium" style={{ background: c.bg, color: c.color }}>
+      <Icon size={13} strokeWidth={2.2} />
+      {c.label}
+    </span>
+  );
+}
+
+function StatusPill({ status }) {
+  const map = {
+    open: { c: "#8A6D1D", bg: "#FBF1D6", t: "Open" },
+    pending: { c: "#8A6D1D", bg: "#FBF1D6", t: "Pending" },
+    accepted: { c: "#3E7A4C", bg: "#E4F1E6", t: "Accepted" },
+    approved: { c: "#3E7A4C", bg: "#E4F1E6", t: "Approved" },
+    rejected: { c: "#A23B3B", bg: "#F7E6E6", t: "Rejected" },
+    closed: { c: "#5B5F6B", bg: "#E9E9EC", t: "Closed" },
+  };
+  const s = map[status] || map.open;
+  return (
+    <span className="rounded px-2 py-0.5 text-[11px] font-semibold tracking-wide uppercase" style={{ background: s.bg, color: s.c, fontFamily: "IBM Plex Mono, monospace" }}>
+      {s.t}
+    </span>
+  );
+}
+
+function LedgerRow({ children }) {
+  return (
+    <div className="relative pl-4">
+      <div className="ml-2 border-l border-dashed" style={{ borderColor: "#D8D2C2" }}>{children}</div>
+    </div>
+  );
+}
+
+function Card({ children, className = "" }) {
+  return <div className={`rounded-md border ${className}`} style={{ background: "#FFFDF8", borderColor: "#E4DFD0" }}>{children}</div>;
+}
+
+function Field({ label, children }) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide" style={{ color: "#7A7362", fontFamily: "IBM Plex Mono, monospace" }}>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+const inputCls = "w-full rounded border px-3 py-2 text-sm outline-none transition focus:ring-2";
+const inputStyle = { borderColor: "#D8D2C2" };
+
+function Btn({ children, onClick, variant = "primary", type = "button", disabled, className = "" }) {
+  const styles = {
+    primary: { background: "#14181F", color: "#F6F3EC" },
+    accent: { background: "#C9962B", color: "#1B2430" },
+    ghost: { background: "transparent", color: "#14181F", border: "1px solid #D8D2C2" },
+    danger: { background: "#A23B3B", color: "#fff" },
+  };
+  return (
+    <button type={type} onClick={onClick} disabled={disabled} className={`rounded px-4 py-2 text-sm font-semibold transition active:scale-[0.98] disabled:opacity-50 ${className}`} style={{ ...styles[variant] }}>
+      {children}
+    </button>
+  );
+}
+
+// ================= CUSTOMER VIEW =================
+function CustomerView() {
+  const [myIds, setMyIds] = useState([]);
+  const [requests, setRequests] = useState({});
+  const [bidsByReq, setBidsByReq] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [form, setForm] = useState({ customer_name: "", phone: "", category: "camera", event_type: "", event_date: "", city: "", budget: "", description: "" });
+  const [submitting, setSubmitting] = useState(false);
+
+  const loadAll = useCallback(async (ids) => {
+    try {
+      const reqs = await db.getRequestsByIds(ids);
+      const reqMap = {};
+      reqs.forEach((r) => (reqMap[r.id] = r));
+      setRequests(reqMap);
+      const bids = await db.getBidsForRequests(ids);
+      const bidMap = {};
+      bids.forEach((b) => {
+        bidMap[b.request_id] = bidMap[b.request_id] || [];
+        bidMap[b.request_id].push(b);
+      });
+      setBidsByReq(bidMap);
+    } catch (e) {
+      setError(e.message);
+    }
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      const mine = db.getMyRequestIds();
+      setMyIds(mine);
+      await loadAll(mine);
+      setLoading(false);
+    })();
+  }, [loadAll]);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!form.customer_name || !form.phone || !form.event_date || !form.city) return;
+    setSubmitting(true);
+    setError("");
+    try {
+      const row = await db.createRequest({ ...form, status: "open" });
+      const updated = db.addMyRequestId(row.id);
+      setMyIds(updated);
+      await loadAll(updated);
+      setForm({ ...form, event_type: "", event_date: "", budget: "", description: "" });
+    } catch (e) {
+      setError(e.message);
+    }
+    setSubmitting(false);
+  };
+
+  const decideBid = async (bid, decision) => {
+    try {
+      const updatedBid = await db.updateBidStatus(bid.id, decision);
+      if (decision === "accepted") {
+        const updatedReq = await db.updateRequestStatus(bid.request_id, "closed");
+        setRequests((r) => ({ ...r, [bid.request_id]: updatedReq }));
+      }
+      setBidsByReq((prev) => ({
+        ...prev,
+        [bid.request_id]: prev[bid.request_id].map((b) => (b.id === bid.id ? updatedBid : b)),
+      }));
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  return (
+    <div className="grid gap-6 md:grid-cols-[380px_1fr]">
+      <Card className="p-5 h-fit">
+        <h2 className="mb-4 text-lg font-semibold" style={{ fontFamily: "Fraunces, serif", color: "#1B2430" }}>Post a request</h2>
+        {error && <p className="mb-3 text-xs" style={{ color: "#A23B3B" }}>{error}</p>}
+        <form onSubmit={submit} className="space-y-3">
+          <Field label="Your name">
+            <input className={inputCls} style={inputStyle} value={form.customer_name} onChange={(e) => setForm({ ...form, customer_name: e.target.value })} required />
+          </Field>
+          <Field label="Phone">
+            <input className={inputCls} style={inputStyle} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} required />
+          </Field>
+          <Field label="Category needed">
+            <div className="flex gap-2">
+              {Object.entries(CATS).map(([k, c]) => (
+                <button type="button" key={k} onClick={() => setForm({ ...form, category: k })} className="flex-1 rounded border py-1.5 text-xs font-medium transition"
+                  style={{ borderColor: form.category === k ? c.color : "#D8D2C2", background: form.category === k ? c.bg : "transparent", color: form.category === k ? c.color : "#5B5F6B" }}>
+                  {c.label}
+                </button>
+              ))}
+            </div>
+          </Field>
+          <Field label="Event type">
+            <input className={inputCls} style={inputStyle} placeholder="Wedding, birthday, corporate…" value={form.event_type} onChange={(e) => setForm({ ...form, event_type: e.target.value })} />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Date">
+              <input type="date" className={inputCls} style={inputStyle} value={form.event_date} onChange={(e) => setForm({ ...form, event_date: e.target.value })} required />
+            </Field>
+            <Field label="City">
+              <input className={inputCls} style={inputStyle} value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} required />
+            </Field>
+          </div>
+          <Field label="Budget (optional)">
+            <input className={inputCls} style={inputStyle} placeholder="₹15,000" value={form.budget} onChange={(e) => setForm({ ...form, budget: e.target.value })} />
+          </Field>
+          <Field label="Details">
+            <textarea className={inputCls} style={inputStyle} rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+          </Field>
+          <Btn type="submit" variant="accent" disabled={submitting} className="w-full">{submitting ? "Posting…" : "Post request"}</Btn>
+        </form>
+      </Card>
+
+      <div>
+        <h2 className="mb-4 text-lg font-semibold" style={{ fontFamily: "Fraunces, serif", color: "#1B2430" }}>Your requests</h2>
+        {loading ? (
+          <div className="flex items-center gap-2 text-sm" style={{ color: "#7A7362" }}><Loader2 className="animate-spin" size={16} /> Loading…</div>
+        ) : myIds.length === 0 ? (
+          <p className="text-sm" style={{ color: "#7A7362" }}>No requests yet — post one to start getting bids.</p>
+        ) : (
+          <div className="space-y-4">
+            {myIds.map((id) => {
+              const r = requests[id];
+              if (!r) return null;
+              const bids = (bidsByReq[id] || []).sort((a, b) => a.price - b.price);
+              return (
+                <Card key={id} className="p-4">
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                    <Tag cat={r.category} />
+                    <StatusPill status={r.status} />
+                    <span className="text-sm font-medium" style={{ color: "#1B2430" }}>{r.event_type || "Event"}</span>
+                    <span className="text-xs" style={{ color: "#7A7362", fontFamily: "IBM Plex Mono, monospace" }}>{r.event_date} · {r.city}</span>
+                  </div>
+                  {r.description && <p className="mb-3 text-sm" style={{ color: "#4A4636" }}>{r.description}</p>}
+                  <div className="text-xs font-semibold uppercase tracking-wide mb-1" style={{ color: "#7A7362", fontFamily: "IBM Plex Mono, monospace" }}>Bids ({bids.length})</div>
+                  {bids.length === 0 ? (
+                    <p className="text-xs" style={{ color: "#A29C89" }}>No bids yet.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {bids.map((b) => (
+                        <LedgerRow key={b.id}>
+                          <div className="flex items-center justify-between py-1.5 pl-3 pr-1">
+                            <div>
+                              <div className="text-sm font-medium" style={{ color: "#1B2430" }}>{b.vendor_name}</div>
+                              {b.message && <div className="text-xs" style={{ color: "#7A7362" }}>{b.message}</div>}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-semibold" style={{ fontFamily: "IBM Plex Mono, monospace", color: "#1B2430" }}>₹{Number(b.price).toLocaleString("en-IN")}</span>
+                              {b.status === "pending" && r.status === "open" ? (
+                                <>
+                                  <button onClick={() => decideBid(b, "accepted")} className="rounded p-1" style={{ background: "#E4F1E6", color: "#3E7A4C" }} title="Accept"><Check size={14} /></button>
+                                  <button onClick={() => decideBid(b, "rejected")} className="rounded p-1" style={{ background: "#F7E6E6", color: "#A23B3B" }} title="Decline"><X size={14} /></button>
+                                </>
+                              ) : (
+                                <StatusPill status={b.status} />
+                              )}
+                            </div>
+                          </div>
+                        </LedgerRow>
+                      ))}
+                    </div>
+                  )}
+                </Card>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
