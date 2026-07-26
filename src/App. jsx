@@ -245,3 +245,307 @@ function CustomerView() {
     </div>
   );
 }
+// ================= VENDOR VIEW =================
+function VendorView() {
+  const [vendor, setVendor] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [form, setForm] = useState({ name: "", category: "camera", phone: "", city: "", bio: "" });
+  const [requests, setRequests] = useState([]);
+  const [myBids, setMyBids] = useState({});
+  const [bidDrafts, setBidDrafts] = useState({});
+
+  useEffect(() => {
+    (async () => {
+      const vid = db.getMyVendorId();
+      if (vid) {
+        const v = await db.getVendor(vid);
+        setVendor(v);
+      }
+      setLoading(false);
+    })();
+  }, []);
+
+  const loadRequests = useCallback(async (v) => {
+    const all = await db.listOpenRequestsByCategory(v.category);
+    setRequests(all);
+    const bids = await db.getBidsForVendor(v.id);
+    const mine = {};
+    bids.forEach((b) => (mine[b.request_id] = b));
+    setMyBids(mine);
+  }, []);
+
+  useEffect(() => {
+    if (vendor && vendor.status === "approved") loadRequests(vendor);
+  }, [vendor, loadRequests]);
+
+  const register = async (e) => {
+    e.preventDefault();
+    if (!form.name || !form.phone || !form.city) return;
+    try {
+      const v = await db.createVendor({ ...form, status: "pending" });
+      db.setMyVendorId(v.id);
+      setVendor(v);
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  const refreshStatus = async () => {
+    const v = await db.getVendor(vendor.id);
+    setVendor(v);
+  };
+
+  const submitBid = async (req) => {
+    const draft = bidDrafts[req.id];
+    if (!draft || !draft.price) return;
+    try {
+      const bid = await db.createBid({ request_id: req.id, vendor_id: vendor.id, vendor_name: vendor.name, price: draft.price, message: draft.message || "", status: "pending" });
+      setMyBids((m) => ({ ...m, [req.id]: bid }));
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  if (loading) return <div className="text-sm" style={{ color: "#7A7362" }}>Loading…</div>;
+
+  if (!vendor) {
+    return (
+      <Card className="mx-auto max-w-md p-6">
+        <h2 className="mb-1 text-lg font-semibold" style={{ fontFamily: "Fraunces, serif", color: "#1B2430" }}>Join as a vendor</h2>
+        <p className="mb-4 text-sm" style={{ color: "#7A7362" }}>Registrations are reviewed before you can bid on requests.</p>
+        {error && <p className="mb-3 text-xs" style={{ color: "#A23B3B" }}>{error}</p>}
+        <form onSubmit={register} className="space-y-3">
+          <Field label="Name / studio name">
+            <input className={inputCls} style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
+          </Field>
+          <Field label="Category">
+            <div className="flex gap-2">
+              {Object.entries(CATS).map(([k, c]) => (
+                <button type="button" key={k} onClick={() => setForm({ ...form, category: k })} className="flex-1 rounded border py-1.5 text-xs font-medium"
+                  style={{ borderColor: form.category === k ? c.color : "#D8D2C2", background: form.category === k ? c.bg : "transparent", color: form.category === k ? c.color : "#5B5F6B" }}>
+                  {c.label}
+                </button>
+              ))}
+            </div>
+          </Field>
+          <Field label="Phone">
+            <input className={inputCls} style={inputStyle} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} required />
+          </Field>
+          <Field label="City">
+            <input className={inputCls} style={inputStyle} value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} required />
+          </Field>
+          <Field label="Short bio">
+            <textarea className={inputCls} style={inputStyle} rows={3} value={form.bio} onChange={(e) => setForm({ ...form, bio: e.target.value })} placeholder="Years of experience, style, notable events…" />
+          </Field>
+          <Btn type="submit" variant="accent" className="w-full">Submit for review</Btn>
+        </form>
+      </Card>
+    );
+  }
+
+  if (vendor.status === "pending") {
+    return (
+      <Card className="mx-auto max-w-md p-8 text-center">
+        <Clock className="mx-auto mb-3" size={28} color="#C9962B" />
+        <h2 className="mb-1 text-lg font-semibold" style={{ fontFamily: "Fraunces, serif", color: "#1B2430" }}>Application pending</h2>
+        <p className="mb-4 text-sm" style={{ color: "#7A7362" }}>Thanks, {vendor.name}. We'll notify you once an admin reviews your <Tag cat={vendor.category} /> application.</p>
+        <Btn variant="ghost" onClick={refreshStatus}>Check status</Btn>
+      </Card>
+    );
+  }
+
+  if (vendor.status === "rejected") {
+    return (
+      <Card className="mx-auto max-w-md p-8 text-center">
+        <X className="mx-auto mb-3" size={28} color="#A23B3B" />
+        <h2 className="mb-1 text-lg font-semibold" style={{ fontFamily: "Fraunces, serif", color: "#1B2430" }}>Application not approved</h2>
+        <p className="text-sm" style={{ color: "#7A7362" }}>Reach out to the platform admin for details.</p>
+      </Card>
+    );
+  }
+
+  return (
+    <div>
+      <div className="mb-5 flex items-center gap-2">
+        <ShieldCheck size={18} color="#3E7A4C" />
+        <span className="text-sm font-medium" style={{ color: "#1B2430" }}>Approved · {vendor.name}</span>
+        <Tag cat={vendor.category} />
+      </div>
+      <h2 className="mb-3 text-lg font-semibold" style={{ fontFamily: "Fraunces, serif", color: "#1B2430" }}>Open requests in your category</h2>
+      {requests.length === 0 ? (
+        <p className="text-sm" style={{ color: "#7A7362" }}>No open requests right now — check back soon.</p>
+      ) : (
+        <div className="space-y-4">
+          {requests.map((r) => {
+            const mine = myBids[r.id];
+            return (
+              <Card key={r.id} className="p-4">
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-medium" style={{ color: "#1B2430" }}>{r.event_type || "Event"}</span>
+                  <span className="text-xs" style={{ color: "#7A7362", fontFamily: "IBM Plex Mono, monospace" }}>{r.event_date} · {r.city}</span>
+                  {r.budget && <span className="text-xs" style={{ color: "#7A7362", fontFamily: "IBM Plex Mono, monospace" }}>Budget: {r.budget}</span>}
+                </div>
+                {r.description && <p className="mb-3 text-sm" style={{ color: "#4A4636" }}>{r.description}</p>}
+                {mine ? (
+                  <div className="flex items-center gap-2 text-sm">
+                    <span style={{ color: "#7A7362" }}>Your bid: </span>
+                    <span className="font-semibold" style={{ fontFamily: "IBM Plex Mono, monospace" }}>₹{Number(mine.price).toLocaleString("en-IN")}</span>
+                    <StatusPill status={mine.status} />
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap items-end gap-2">
+                    <Field label="Your price">
+                      <input type="number" className={inputCls} style={{ ...inputStyle, width: 140 }} onChange={(e) => setBidDrafts((d) => ({ ...d, [r.id]: { ...d[r.id], price: e.target.value } }))} />
+                    </Field>
+                    <Field label="Note (optional)">
+                      <input className={inputCls} style={{ ...inputStyle, width: 220 }} onChange={(e) => setBidDrafts((d) => ({ ...d, [r.id]: { ...d[r.id], message: e.target.value } }))} />
+                    </Field>
+                    <Btn variant="accent" onClick={() => submitBid(r)}>Submit bid</Btn>
+                  </div>
+                )}
+              </Card>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+// ================= ADMIN VIEW =================
+function AdminView() {
+  const [authed, setAuthed] = useState(false);
+  const [pass, setPass] = useState("");
+  const [vendors, setVendors] = useState([]);
+  const [requests, setRequests] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setVendors(await db.listVendors());
+    setRequests(await db.listAllRequests());
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (authed) load();
+  }, [authed, load]);
+
+  const decide = async (v, status) => {
+    const updated = await db.updateVendorStatus(v.id, status);
+    setVendors((vs) => vs.map((x) => (x.id === v.id ? updated : x)));
+  };
+
+  if (!authed) {
+    return (
+      <Card className="mx-auto max-w-sm p-6">
+        <h2 className="mb-1 text-lg font-semibold" style={{ fontFamily: "Fraunces, serif", color: "#1B2430" }}>Admin sign-in</h2>
+        <p className="mb-4 text-xs" style={{ color: "#7A7362" }}>
+          Placeholder password only — replace with real auth (see README) before going live.
+        </p>
+        <div className="flex gap-2">
+          <input type="password" className={inputCls} style={inputStyle} placeholder="Password" value={pass} onChange={(e) => setPass(e.target.value)} />
+          <Btn onClick={() => pass === (import.meta.env.VITE_ADMIN_PASSWORD || "admin123") && setAuthed(true)}>Enter</Btn>
+        </div>
+      </Card>
+    );
+  }
+
+  const pending = vendors.filter((v) => v.status === "pending");
+  const others = vendors.filter((v) => v.status !== "pending");
+
+  return (
+    <div className="space-y-8">
+      <div>
+        <h2 className="mb-3 text-lg font-semibold" style={{ fontFamily: "Fraunces, serif", color: "#1B2430" }}>
+          Pending vendor applications {loading && <Loader2 className="inline animate-spin ml-1" size={14} />}
+        </h2>
+        {pending.length === 0 ? (
+          <p className="text-sm" style={{ color: "#7A7362" }}>Nothing waiting on you.</p>
+        ) : (
+          <div className="space-y-2">
+            {pending.map((v) => (
+              <Card key={v.id} className="flex flex-wrap items-center justify-between gap-3 p-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium" style={{ color: "#1B2430" }}>{v.name}</span>
+                    <Tag cat={v.category} />
+                  </div>
+                  <div className="text-xs" style={{ color: "#7A7362" }}>{v.city} · {v.phone}</div>
+                  {v.bio && <div className="text-xs mt-1" style={{ color: "#4A4636" }}>{v.bio}</div>}
+                </div>
+                <div className="flex gap-2">
+                  <Btn variant="accent" onClick={() => decide(v, "approved")}>Approve</Btn>
+                  <Btn variant="danger" onClick={() => decide(v, "rejected")}>Reject</Btn>
+                </div>
+              </Card>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <h2 className="mb-3 text-lg font-semibold" style={{ fontFamily: "Fraunces, serif", color: "#1B2430" }}>All vendors</h2>
+        <div className="space-y-2">
+          {others.map((v) => (
+            <div key={v.id} className="flex items-center justify-between rounded border px-3 py-2 text-sm" style={{ borderColor: "#E4DFD0" }}>
+              <div className="flex items-center gap-2">
+                <span style={{ color: "#1B2430" }}>{v.name}</span>
+                <Tag cat={v.category} />
+              </div>
+              <StatusPill status={v.status} />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <h2 className="mb-3 text-lg font-semibold" style={{ fontFamily: "Fraunces, serif", color: "#1B2430" }}>All requests</h2>
+        <div className="space-y-2">
+          {requests.map((r) => (
+            <div key={r.id} className="flex flex-wrap items-center justify-between gap-2 rounded border px-3 py-2 text-sm" style={{ borderColor: "#E4DFD0" }}>
+              <div className="flex items-center gap-2">
+                <Tag cat={r.category} />
+                <span style={{ color: "#1B2430" }}>{r.event_type || "Event"}</span>
+                <span className="text-xs" style={{ color: "#7A7362", fontFamily: "IBM Plex Mono, monospace" }}>{r.event_date} · {r.city}</span>
+              </div>
+              <StatusPill status={r.status} />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ================= APP SHELL =================
+export default function App() {
+  const [role, setRole] = useState("customer");
+
+  return (
+    <div className="min-h-screen" style={{ background: "#F6F3EC", fontFamily: "Inter, sans-serif" }}>
+      <header style={{ background: "#14181F" }} className="px-6 py-5">
+        <div className="mx-auto flex max-w-5xl items-center justify-between flex-wrap gap-3">
+          <div>
+            <div className="text-xl font-semibold" style={{ fontFamily: "Fraunces, serif", color: "#F6F3EC", letterSpacing: "-0.01em" }}>Crew Call</div>
+            <div className="text-xs" style={{ color: "#A6A08F" }}>Book cameramen, caterers &amp; makeup artists — no middleman calls, just a ledger.</div>
+          </div>
+          <nav className="flex gap-1 rounded-full p-1" style={{ background: "#1F2530" }}>
+            {[{ k: "customer", t: "Post a request" }, { k: "vendor", t: "Vendor" }, { k: "admin", t: "Admin" }].map((tab) => (
+              <button key={tab.k} onClick={() => setRole(tab.k)} className="rounded-full px-3.5 py-1.5 text-xs font-medium transition"
+                style={{ background: role === tab.k ? "#C9962B" : "transparent", color: role === tab.k ? "#1B2430" : "#C9C4B3" }}>
+                {tab.t}
+              </button>
+            ))}
+          </nav>
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-5xl px-6 py-8">
+        {role === "customer" && <CustomerView />}
+        {role === "vendor" && <VendorView />}
+        {role === "admin" && <AdminView />}
+      </main>
+    </div>
+  );
+}
